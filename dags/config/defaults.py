@@ -1,7 +1,7 @@
 """
 KubernetesPodOperator 공통 kwargs 팩토리.
 
-배치 실행 DAG(order_sync, order_retry, daily_ad_stats, ads_csv_export, settlement_*)가
+배치 실행 DAG(order_sync, daily_ad_stats, ads_csv_export)가
 공통으로 쓰는 namespace/리소스/시크릿/환경변수를 한 곳에서 관리한다.
 """
 
@@ -17,7 +17,7 @@ def batch_pod_kwargs(group: str, job_name: str, extra_args: list[str] | None = N
     """
     KubernetesPodOperator(**kwargs)에 그대로 펼쳐 넣을 공통 인자 dict를 만든다.
 
-    :param group: config.images.IMAGES 의 키 (예: "job-order", "job-ads", "job-settlement")
+    :param group: config.images.IMAGES 의 키 (예: "job-order", "job-ads")
     :param job_name: Spring Batch job 이름. SPRING_BATCH_JOB_NAME env로 앱에 전달된다.
     :param extra_args: KPO arguments 리스트에 추가할 항목
                         (예: ["targetDate={{ params.target_date }}"])

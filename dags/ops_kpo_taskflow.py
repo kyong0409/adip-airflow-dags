@@ -15,7 +15,7 @@ with DAG(
     start_date=datetime(2026, 1, 1),
     catchup=False,
     is_paused_upon_creation=True,
-    tags=["adip", "ops-showcase"],
+    tags=["adip", "demo"],
 ) as dag:
 
     @task.kubernetes(
