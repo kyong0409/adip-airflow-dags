@@ -10,6 +10,10 @@
   ② @task(executor="KubernetesExecutor")   — 데코레이터로 task별 executor 지정 + pod_override 리소스
   ③ KubernetesPodOperator                  — Spring Batch job 실행 (임의 이미지 Pod, Airflow 불필요)
 
+KPO 블록에는 AKS 전환 시 필요한 옵션(ACR pull secret, Workload Identity 라벨/SA,
+Key Vault Secrets Store CSI 마운트, Azure Files PVC 파일 마운트)을 주석으로 함께 담았다 —
+로컬(minikube) 시연에서는 주석 상태 그대로, AKS 배포 시 주석을 풀어 값만 바꾼다.
+
 전제:
   - 클러스터 executor 설정은 "CeleryExecutor,KubernetesExecutor" (values-multi.yaml).
     리스트 첫 번째가 환경 기본값이므로 executor를 지정하지 않은 task는 전부 Celery에서 돈다.
@@ -26,6 +30,7 @@
 
 from datetime import datetime, timedelta
 
+import pendulum
 from airflow import DAG
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from airflow.providers.cncf.kubernetes.secret import Secret
@@ -46,7 +51,8 @@ MSSQL_SECRET = Secret("env", "MSSQL_SA_PASSWORD", "mssql-secret", "SA_PASSWORD")
 default_args = {
     "owner": "adip",
     "depends_on_past": False,  # 이전 스케줄 실행 결과와 무관하게 실행
-    "start_date": datetime(2026, 1, 1),
+    # tz-aware start_date → 아래 cron 스케줄이 KST 기준으로 해석된다 (naive datetime 은 UTC)
+    "start_date": pendulum.datetime(2026, 1, 1, tz="Asia/Seoul"),
     "retries": 1,  # KPO 재시도 = Pod 새로 생성. 앱이 UniqueRunIdIncrementer 를 내장하므로
     #                동일 파라미터 재시도에도 JobInstanceAlreadyCompleteException 이 없다.
     #                (incrementer 없는 앱이면 arguments 에 run.id="{{ run_id }}" 를 넣어 회피)
@@ -132,10 +138,22 @@ with DAG(
 
         # ── 실행 위치/이미지 ────────────────────────────────────────────
         namespace="batch",
-        image=IMAGE,
+        image=IMAGE,  # AKS 에서는 ACR 경로 (예: "myacr.azurecr.io/adip/job-order:0.1.0")
         image_pull_policy="IfNotPresent",
-        # image_pull_secrets=[k8s.V1LocalObjectReference("acr-secret")],  # 프라이빗 레지스트리(ACR 등)
-        # service_account_name="batch-runner",  # Pod 에 별도 K8s 권한/Workload Identity 필요 시
+        # image_pull_secrets=[k8s.V1LocalObjectReference("acr-pull-secret")],
+        #     ↑ ACR 인증 방식 1: docker-registry Secret. AKS-ACR attach(kubelet MI 권한)를
+        #       걸었다면 pull secret 없이 당겨지므로 이 줄 자체가 불필요하다.
+
+        # ── AKS Workload Identity (Pod 가 Azure 리소스에 UMI 로 인증할 때) ──
+        # 배치 앱이 Key Vault/Blob 등에 직접 접근한다면 아래 3종 세트를 함께 켠다:
+        #   ⑴ federated credential 이 연결된 UMI, ⑵ 그 UMI 를 annotation 으로 가진 SA,
+        #   ⑶ Pod 라벨 azure.workload.identity/use=true (이 라벨이 있어야 WI 웹훅이
+        #      토큰 볼륨/env(AZURE_CLIENT_ID 등)를 주입한다)
+        # service_account_name="batch-runner",
+        # labels={
+        #     "azure.workload.identity/use": "true",
+        #     "app": "order-sync",  # 그 외 라벨은 자유 (모니터링/네트워크폴리시 셀렉터용)
+        # },
 
         # ── 무엇을 실행할지: cmds / arguments ──────────────────────────
         # cmds 생략 → 이미지 ENTRYPOINT(["java","-jar","/app/app.jar"]) 사용.
@@ -170,11 +188,44 @@ with DAG(
         # node_selector={"agentpool": "batch"},
         # tolerations=[k8s.V1Toleration(key="batch", operator="Exists", effect="NoSchedule")],
 
+        # ── 파일 / 시크릿 마운트 (volumes + volume_mounts 는 짝으로) ──────
+        # ① Key Vault 시크릿을 파일로: Secrets Store CSI driver (AKS addon
+        #    azureKeyvaultSecretsProvider 활성 + SecretProviderClass 리소스 필요.
+        #    Workload Identity 조합 시 위 labels/SA 도 함께 켤 것).
+        #    Spring 에서 읽는 법: 파일을 직접 읽거나, env 로
+        #    SPRING_CONFIG_IMPORT=optional:configtree:/mnt/secrets-store/ 를 주면
+        #    파일명이 그대로 프로퍼티 키가 된다.
+        # ② 배치 입출력 파일 공유: Azure Files(SMB/NFS) PVC 마운트.
+        # volumes=[
+        #     k8s.V1Volume(  # ① Key Vault → 파일
+        #         name="secrets-store",
+        #         csi=k8s.V1CSIVolumeSource(
+        #             driver="secrets-store.csi.k8s.io",
+        #             read_only=True,
+        #             volume_attributes={"secretProviderClass": "batch-kv-provider"},
+        #         ),
+        #     ),
+        #     k8s.V1Volume(  # ② 배치 입출력 파일 (PVC 는 배치 네임스페이스에 미리 생성)
+        #         name="batch-data",
+        #         persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+        #             claim_name="batch-data-pvc",
+        #         ),
+        #     ),
+        # ],
+        # volume_mounts=[
+        #     k8s.V1VolumeMount(name="secrets-store", mount_path="/mnt/secrets-store", read_only=True),
+        #     k8s.V1VolumeMount(name="batch-data", mount_path="/data"),
+        #     # sub_path="order" 를 주면 PVC 안의 특정 하위 디렉토리만 마운트
+        # ],
+
         # ── 운영 파라미터 ─────────────────────────────────────────────
         get_logs=True,  # 컨테이너 stdout 을 Airflow task 로그로 스트리밍 (배치 로그를 UI 에서 봄)
         on_finish_action="delete_succeeded_pod",  # 성공 Pod 만 삭제, 실패 Pod 는 남겨 kubectl 디버깅
-        #                                           운영 안정화 후엔 "delete_pod" 로 전환 고려
+        #                                           운영 안정화 후엔 "delete_pod" 로 전환 고려.
+        #                                           (구 is_delete_operator_pod=True 는 deprecated — 이걸로 대체)
         startup_timeout_seconds=300,  # 이미지 pull + 스케줄링 대기 한도 (기본 120초는 첫 pull 에 짧을 수 있음)
+        # in_cluster=True,            # (기본) Airflow 가 도는 클러스터 안에 Pod 생성.
+        #                               다른 클러스터로 보내려면 in_cluster=False + kubernetes_conn_id=
         # reattach_on_restart=True,   # (기본) 스케줄러 재시작 시 돌던 Pod 에 재부착 — 배치 중복 실행 방지
         # deferrable=True,            # Pod 완료 대기를 triggerer 로 넘겨 워커 슬롯 절약 (장시간 배치에 유용)
         # do_xcom_push=True,          # 컨테이너가 /airflow/xcom/return.json 을 쓰는 경우에만 의미 있음

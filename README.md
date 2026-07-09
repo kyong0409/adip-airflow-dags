@@ -27,7 +27,7 @@ Executors Concurrently", Airflow 3.0에서 stable). 과거의 "환경 자체를 
 |---|---|---|---|
 | `demo_bash_ops` | `demo_bash_ops.py` | 멀티 Executor 비교 시연 — 같은 sleep 부하를 Celery 태스크 vs K8s 태스크로 나란히 실행해 Pod 기동 지연을 비교. 말미 `java_runtime_check`는 **의도된 실패**(워커 이미지엔 JDK가 없다 → 배치 본체를 KPO로 격리하는 이유의 실증) | `preflight → [sleep_5s_celery×10, sleep_5s_k8s×10(executor=KubernetesExecutor)] → java_runtime_check` |
 | `orderSyncJob` | `order_sync.py` | 주문 동기화 배치 파이프라인 — skip 초과로 **의도적 실패 → UI 재실행 사이클**의 주인공. 성공 후 같은 이미지에서 `--spring.batch.job.name`만 바꿔 CSV export까지 이어짐 | `preflight(echo) → run_order_sync(orderSyncJob) → run_order_export(orderCsvExportJob, executor=KubernetesExecutor)` |
-| `sample_batch_template` | `sample_batch_template.py` | **신규 배치 DAG 작성용 학습/복붙 템플릿** — 시연 범위 아님(기본 paused). `batch_pod_kwargs`가 숨긴 KPO 파라미터를 전부 풀어 주석으로 설명. `@task`(기본 Celery) / `@task(executor=...)`+pod_override / KPO 3패턴 + cron 스케줄·params·XCom 배선 포함 | `resolve_target_date(@task) → heavy_precheck(@task, executor=KubernetesExecutor) → run_order_sync(KPO, orderSyncJob)` |
+| `sample_batch_template` | `sample_batch_template.py` | **신규 배치 DAG 작성용 학습/복붙 템플릿** — 시연 범위 아님(기본 paused). `batch_pod_kwargs`가 숨긴 KPO 파라미터를 전부 풀어 주석으로 설명. `@task`(기본 Celery) / `@task(executor=...)`+pod_override / KPO 3패턴 + cron 스케줄·params·XCom 배선 + AKS 옵션(ACR·Workload Identity·Key Vault CSI 마운트·Azure Files PVC, 주석) 포함 | `resolve_target_date(@task) → heavy_precheck(@task, executor=KubernetesExecutor) → run_order_sync(KPO, orderSyncJob)` |
 
 KPO 배치 task는 필요 시크릿으로 k8s Secret(`mssql-secret`)을 사용한다.
 
