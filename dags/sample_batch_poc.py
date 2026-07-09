@@ -145,4 +145,4 @@ with DAG(
         #                     단순하게 유지하기 위해 비활성 — 워커 슬롯 절약 관찰 시 해제
     )
 
-    run_order_sync_two() << run_order_sync << heavy_precheck(resolve_target_date())
+    run_order_sync << run_order_sync_two() << heavy_precheck(resolve_target_date())
