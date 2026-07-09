@@ -78,6 +78,7 @@ with DAG(
     )
     def heavy_precheck(target_date: str) -> str:
         datetime.strptime(target_date, "%Y%m%d")
+        time.sleep(100)
         return target_date
 
     # ③ Spring Batch 실행 — PoC 에 존재하는 리소스만 사용 (batch ns, 로컬 이미지, mssql-secret)
