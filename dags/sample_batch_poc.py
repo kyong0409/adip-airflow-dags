@@ -78,7 +78,7 @@ with DAG(
     )
     def heavy_precheck(target_date: str) -> str:
         datetime.strptime(target_date, "%Y%m%d")
-        time.sleep(100)
+        # time.sleep(100)
         return target_date
 
     # ③ Spring Batch 실행 — PoC 에 존재하는 리소스만 사용 (batch ns, 로컬 이미지, mssql-secret)
@@ -111,4 +111,38 @@ with DAG(
         #                     단순하게 유지하기 위해 비활성 — 워커 슬롯 절약 관찰 시 해제
     )
 
-    run_order_sync << heavy_precheck(resolve_target_date())
+
+    ## KubernetesExecutor 실행으로 변경
+    # @task(executor="KubernetesExecutor")
+    def run_order_sync_two():
+        KubernetesPodOperator(
+        task_id="run_order_sync",
+        executor="KubernetesExecutor",
+        name="sample-poc-order-sync",
+        namespace="batch",
+        image=IMAGE,
+        image_pull_policy="IfNotPresent",  # minikube 내 로컬 빌드 이미지 사용
+        arguments=[
+            "--spring.batch.job.name=orderSyncJob",
+            "targetDate={{ ti.xcom_pull(task_ids='heavy_precheck') }}",
+            "skipLimit={{ params.skip_limit }}",
+        ],
+        env_vars={
+            "SPRING_PROFILES_ACTIVE": "k8s",
+            "TZ": "Asia/Seoul",
+            "JAVA_TOOL_OPTIONS": "-Xms256m -Xmx768m",
+        },
+        secrets=[MSSQL_SECRET],
+        container_resources=k8s.V1ResourceRequirements(
+            requests={"cpu": "250m", "memory": "512Mi"},
+            limits={"cpu": "1", "memory": "1Gi"},
+        ),
+        get_logs=True,
+        on_finish_action="keep_pod",
+        startup_timeout_seconds=300,
+        in_cluster=True,
+        # deferrable=True,  # triggerer 는 떠 있으나(values-common.yaml) PoC 기본 경로 검증을
+        #                     단순하게 유지하기 위해 비활성 — 워커 슬롯 절약 관찰 시 해제
+    )
+
+    run_order_sync_two() << run_order_sync << heavy_precheck(resolve_target_date())
