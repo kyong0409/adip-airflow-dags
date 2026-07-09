@@ -103,7 +103,7 @@ with DAG(
             limits={"cpu": "1", "memory": "1Gi"},
         ),
         get_logs=True,
-        on_finish_action="delete_succeeded_pod",
+        on_finish_action="keep_pod",
         startup_timeout_seconds=300,
         in_cluster=True,
         # deferrable=True,  # triggerer 는 떠 있으나(values-common.yaml) PoC 기본 경로 검증을
