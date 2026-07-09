@@ -116,7 +116,7 @@ with DAG(
     # @task(executor="KubernetesExecutor")
     def run_order_sync_two():
         KubernetesPodOperator(
-        task_id="run_order_sync",
+        task_id="run_order_sync_two",
         executor="KubernetesExecutor",
         name="sample-poc-order-sync",
         namespace="batch",
